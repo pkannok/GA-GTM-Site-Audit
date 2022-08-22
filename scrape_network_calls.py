@@ -17,26 +17,33 @@ import os, time, json, csv, requests, re
 # Set client directory for working files
 client_dir = r"C:\Users\kanno\Desktop\WCU"
 os.chdir(client_dir)
-
-# Get page URLs from sitemap
-## TO BE BUILT - USE CUSTOM FUNCTION ##
-page_url = "https://westcoastuniversity.edu/"
 sitemap_url = "https://westcoastuniversity.edu/sitemap.xml"
 
-# Custom function to iterate sitemap
+# Read and save sitemap locally
 def loadRSS(url):
     response = requests.get(url)
-    with open("sitemap.xml", "wb") as f:
+    filename = "sitemap.xml"
+    with open(filename, "wb") as f:
         f.write(response.content)
+    return filename
+        
+# Iterate local sitemap file and return loc URLs as a list
+def parseUrls(sitemap_filename):
+    tree = ET.parse(os.path.join(client_dir, sitemap_filename))
+    sm_url_lst = []
+    for elem in tree.iter():
+        if "}loc" in elem.tag:
+            sm_url_lst.append(elem.text)
+    return sm_url_lst
 
-tree = ET.parse(os.path.join(client_dir, "sitemap.xml"))
-root = tree.getroot()
-xml_str = ET.tostring(root, encoding = "utf8", method = "xml").decode("utf-8")
-pattern = '(?<=<loc>)[a-zA-z]+://[^\s]*(?=</loc>)'
-sm_urls_lst = re.findall(pattern, xml_str)
+url_lst = parseUrls(loadRSS(sitemap_url))
+page_ids_df = pd.DataFrame(columns = [
+    'Page URL',
+    'GTM Container IDs',
+    'UA Tracking IDs',
+    'GA4 Measurement IDs'])
 
-
-# Log and check network requests for Google IDs
+# Log network requests and check for Google IDs
 if __name__ == "__main__":
     # Enable Performance Logging in Chrome
     desired_capabilities = DesiredCapabilities.CHROME
@@ -57,58 +64,55 @@ if __name__ == "__main__":
                               desired_capabilities=desired_capabilities)
     
     # Send a request to the website and pause
-    driver.get(page_url)
-    time.sleep(10)
-    
-    # Capture logs from Chrome Performance DevTools
-    logs = driver.get_log("performance")
-    
-    # Opens a writeable JSON file and writes the logs into file
-    with open("network_log.json", "w", encoding = "utf-8") as f:
-        f.write("[")
+    n = 0
+    for url in url_lst:
+        n+=1
+        driver.get(url)
+        print(n, url)
+        time.sleep(5)
         
-        # Iterate over all logs and parse with JSON
-        for log in logs:
-            network_log = json.loads(log["message"])["message"]
+        # Capture logs from Chrome Performance DevTools
+        logs = driver.get_log("performance")
+        
+        # Opens a writeable JSON file and writes the logs into file
+        with open("network_log.json", "w", encoding = "utf-8") as f:
+            f.write("[")
             
-            # Checks if the current 'method' key has a network value
-            if("Network.response" in network_log["method"]
-               or "Network.request" in network_log["method"]
-               or "Network.webSocket" in network_log["method"]):
-
-                # Writes network log to JSON file
-                f.write(json.dumps(network_log) + ",")
-        f.write("{}]")
-        
-    print("Quitting Selenium WebDriver")
-    driver.quit()
+            # Iterate over all logs and parse with JSON
+            for log in logs:
+                network_log = json.loads(log["message"])["message"]
+                
+                # Checks if the current 'method' key has a network value
+                if("Network.response" in network_log["method"]
+                   or "Network.request" in network_log["method"]
+                   or "Network.webSocket" in network_log["method"]):
     
-    # Create blank dataframe
-    column_names = ["Page", "GTM Container ID", "UA Tracking ID", "GA4 Measurement ID"]
-    page_ids_df = pd.DataFrame(columns = column_names)
-    
-    # Read the JSON file and parse for GA and GTM IDs
-    json_file = "network_log.json"
-    with open(json_file, "r", encoding = "utf-8") as f:
-        logs = json.loads(f.read())
-        gtm_lst = []
-        ua_lst = []
-        ga4_lst = []
-        
-        for log in logs:
-            try: 
-                network_url = log["params"]["request"]["url"]
-                if network_url.find("tid=") != -1:
-                    ga_id = parse_qs(urlparse(network_url).query)['tid'][0]
-                    if parse_qs(urlparse(network_url).query)['v'][0] == "1":
-                        ua_lst.append(ga_id)
-                    if parse_qs(urlparse(network_url).query)['v'][0] == "2":
-                        ga4_lst.append(ga_id)
-                if network_url.find("gtm.js") != -1:
-                    ga_id = parse_qs(urlparse(network_url).query)['id'][0]
-                    gtm_lst.append(ga_id)
-            except Exception:
-                pass
+                    # Writes network log to JSON file
+                    f.write(json.dumps(network_log) + ",")
+            f.write("{}]")
+           
+        # Read the JSON file and parse for GA and GTM IDs
+        json_file = "network_log.json"
+        with open(json_file, "r", encoding = "utf-8") as f:
+            logs = json.loads(f.read())
+            gtm_lst = []
+            ua_lst = []
+            ga4_lst = []
+            
+            for log in logs:
+                try: 
+                    network_url = log["params"]["request"]["url"]
+                    if network_url.find("tid=") != -1:
+                        ga_id = parse_qs(urlparse(network_url).query)['tid'][0]
+                        if parse_qs(urlparse(network_url).query)['v'][0] == "1":
+                            ua_lst.append(ga_id)
+                        if parse_qs(urlparse(network_url).query)['v'][0] == "2":
+                            ga4_lst.append(ga_id)
+                    if network_url.find("gtm.js") != -1:
+                        ga_id = parse_qs(urlparse(network_url).query)['id'][0]
+                        gtm_lst.append(ga_id)
+                except Exception:
+                    pass
         
         # Deduplicate IDs
         gtm_lst = [*set(gtm_lst)]
@@ -116,8 +120,11 @@ if __name__ == "__main__":
         ga4_lst = [*set(ga4_lst)]
         
         # Append to dataframe
-        new_df_row = [page_url, ", ".join(gmt_lst), ", ".join(ua_lst), ", ".join(ga4_lst)]
-        page_ids_df.loc[len(page_page_ids_df)] = new_df_row
+        new_df_row = [url, ", ".join(gtm_lst), ", ".join(ua_lst), ", ".join(ga4_lst)]
+        page_ids_df.loc[len(page_ids_df)] = new_df_row
         
+    print("Quitting Selenium WebDriver")
+    driver.quit()
+
     # Export dataframe to Excel file
-    ##  TO BE BUILT ##
+    page_ids_df.to_excel("Pages in Sitemap and Google IDs.xlsx", index = False)
