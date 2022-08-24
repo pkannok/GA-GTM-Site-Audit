@@ -10,14 +10,16 @@ from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from webdriver_manager.chrome import ChromeDriverManager
 from urllib.parse import urlparse
 from urllib.parse import parse_qs
+from bs4 import BeautifulSoup
 import pandas as pd
 import xml.etree.ElementTree as ET
-import os, time, json, csv, requests, re
+import os, time, json, requests, tldextract
 
 # Set client directory for working files
-client_dir = r"C:\Users\kanno\Desktop\WCU"
+client_dir = r"C:\Users\kanno\Desktop\Momentous"
+
+# Update working directory
 os.chdir(client_dir)
-sitemap_url = "https://westcoastuniversity.edu/sitemap.xml"
 
 # Read and save sitemap locally
 def loadRSS(url):
@@ -36,7 +38,53 @@ def parseUrls(sitemap_filename):
             sm_url_lst.append(elem.text)
     return sm_url_lst
 
-url_lst = parseUrls(loadRSS(sitemap_url))
+# Scrape a webpage for all URL in links
+def scrapeURLs(url):
+    urls_lst = [url]
+    reqs = requests.get(url)
+    soup = BeautifulSoup(reqs.text, 'html.parser')
+    page_domain = tldextract.extract(url).domain
+    for a in soup.find_all('a'):
+        href = a.get('href')
+        if href.startswith("/"):
+            href = url + a.get('href')[1:]
+        if href.startswith("http"):
+            this_domain = tldextract.extract(href).domain
+            if this_domain == page_domain:
+                urls_lst.append(href)
+    urls_lst = [*set(urls_lst)]
+    return urls_lst
+
+# Scrape all URLs found on a page
+def siteScrapeURLs(url):
+    this_page_url_lst = scrapeURLs(url)
+    scraped_pages_lst = []
+    new_pages_lst = []
+    scraped_pages_lst.append(url)
+    for page in this_page_url_lst:
+        if page not in scraped_pages_lst:
+            scraped_pages_lst.append(page)
+            new_pages_lst.extend(scrapeURLs(page))
+            new_pages_lst = [*set(new_pages_lst)]
+    return scraped_pages_lst, new_pages_lst
+
+### START CONTROL SECTION
+# Use one of the following options to source URLs
+# Comment out the unused option
+
+# Option 1: Use sitemap
+# sitemap_loc = "https://westcoastuniversity.edu/sitemap.xml"
+# url_lst = parseUrls(loadRSS(sitemap_loc))
+
+# Option 2: Use homepage
+homepage_loc = "https://www.livemomentous.com/"
+url_lst, new_lst = siteScrapeURLs(homepage_loc)
+url_lst.extend(new_lst)
+url_lst = [*set(url_lst)]
+
+### END CONTROL SECTION
+
+# Create empty dataframe to be populated with Google IDs
 page_ids_df = pd.DataFrame(columns = [
     'Page URL',
     'GTM Container IDs',
